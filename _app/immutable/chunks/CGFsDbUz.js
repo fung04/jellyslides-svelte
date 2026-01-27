@@ -1,0 +1,1 @@
+import{w as n}from"./C3KTsffu.js";function s(e,a){const t=localStorage.getItem(e),o=t?JSON.parse(t):a,r=n(o);return r.subscribe(i=>{localStorage.setItem(e,JSON.stringify(i))}),r}const f=s("serverConfig",null),l=s("appConfig",{pictureQuality:1080,libraryParams:["Movie","Series"],duration:3e4,wakeLock:!1,websocket:!1,transitionEffect:"fade"});export{l as a,f as s};
