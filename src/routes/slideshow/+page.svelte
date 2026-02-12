@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { serverConfig, appConfig } from '$lib/stores';
 	import { JellyfinApi, ImageType, VideoType } from '$lib/jellyfinApi';
 	import { applyBlurhash, getDataUrlFromBlurhash } from '$lib/blurhash';
-
+	import { slideshowState } from '$lib/slideshow-state.svelte';
+	import { initWebSocket, disconnectWebSocket } from '$lib/ws-handler';
 	// Swiper
 	import Swiper from 'swiper';
 	import { Autoplay, EffectFade, Keyboard, Navigation } from 'swiper/modules';
@@ -23,6 +25,13 @@
 
 	// Wake Lock
 	let wakeLockSentinel: WakeLockSentinel | null = null;
+
+	// Helper to determine layout class
+	function getLayoutType(slide: any) {
+		if (slide.type === 'Audio') return 'is-audio';
+		if (slide.imageType === 'Primary') return 'is-portrait';
+		return 'is-landscape';
+	}
 
 	onMount(() => {
 		if (!$serverConfig) {
@@ -144,6 +153,63 @@
 		}
 	}
 
+	function handleKeydown(e: KeyboardEvent) {
+		if (!swiperInstance) return;
+		if (e.key === 'ArrowRight') {
+			swiperInstance.slideNext();
+			swiperInstance.autoplay.start();
+			slideshowState.isRemoteControlling = false;
+		}
+		if (e.key === 'ArrowLeft') {
+			swiperInstance.slidePrev();
+		}
+		if (e.key === 'p') {
+			if (swiperInstance.autoplay.running) {
+				swiperInstance.autoplay.stop();
+			} else {
+				swiperInstance.autoplay.start();
+			}
+		}
+	}
+
+	// --- Reactivity for Remote Control ---
+	$effect(() => {
+		if (slideshowState.isRemoteControlling && slideshowState.activeSlide) {
+			const newItem = slideshowState.activeSlide;
+			console.log('Switching to Remote Slide:', newItem.name);
+			if (swiperInstance) {
+				swiperInstance.autoplay.stop();
+				// Strategy: Find current index, replace NEXT slide with new item, slide to it.
+				// Or simplier for Svelte: Update `slides` array?
+				// Updating `slides` array causes re-render of list.
+				// Let's try to just prepend the new item and slide to 0.
+				// Note: `slides` is reactive state.
+				// slides = [newItem, ...slides];
+				// The above might cause full DOM refresh.
+				// Alternative: Just set slides to [newItem] if we want to lock it?
+				// But we want transitions.
+				// Let's replace the "active" slide in the array *after* the current one.
+				// Replace the next slide with the remote item, then slide to it
+				const activeIndex = swiperInstance.realIndex;
+				const nextIndex = (activeIndex + 1) % slides.length;
+				// Update the data in the array
+				slides[nextIndex] = newItem;
+				// Trigger Swiper update (it observes DOM)
+				setTimeout(() => {
+					swiperInstance?.slideToLoop(nextIndex);
+					swiperInstance?.slideNext();
+				}, 50);
+			}
+		} else if (
+			!slideshowState.isRemoteControlling &&
+			swiperInstance &&
+			!swiperInstance.autoplay.running
+		) {
+			// Resume Autoplay
+			swiperInstance.autoplay.start();
+		}
+	});
+
 	async function requestWakeLock() {
 		if ('wakeLock' in navigator) {
 			try {
@@ -196,28 +262,50 @@
 			<button class="btn btn-secondary" onclick={goBack}>Back to Config</button>
 		</div>
 	{:else}
-		<div class="swiper">
+		<div class="swiper swiper-container">
 			<div class="swiper-wrapper">
-				{#each slides as slide (slide.id + slide.imageType)}
-					<div class="swiper-slide">
+				{#each slides as slide, i (slide.id + i)}
+					<!-- Determine Layout Class -->
+					{@const layoutClass = getLayoutType(slide)}
+					<div class="swiper-slide {layoutClass}">
+						<!-- Background (Applied to all) -->
 						<div
 							class="slide-bg"
 							style="background-image: url('{getBlurhashDataUrl(slide)}');"
 						></div>
-
-						<img src={getImageSrc(slide)} alt={slide.name} loading="lazy" class="slide-img" />
-
-						<div class="caption-wrapper">
-							<h2 class="slide-title">{slide.name}</h2>
-							{#if slide.overview}
-								<p class="slide-overview">{slide.overview}</p>
-							{/if}
-						</div>
+						{#if layoutClass === 'is-audio'}
+							<div class="audio-card">
+								<img class="slide-img" src={getImageSrc(slide)} alt={slide.name} loading="lazy" />
+								<div class="caption-wrapper">
+									<h2 class="swiper-slide-caption">{slide.name}</h2>
+									<p class="swiper-slide-overview">{slide.overview}</p>
+								</div>
+							</div>
+						{:else if layoutClass === 'is-portrait'}
+							<div class="portrait-card">
+								<img class="slide-img" src={getImageSrc(slide)} alt={slide.name} loading="lazy" />
+								<div class="caption-wrapper">
+									<h2 class="swiper-slide-caption">{slide.name}</h2>
+									<p class="swiper-slide-overview">{slide.overview}</p>
+								</div>
+							</div>
+						{:else}
+							<!-- Landscape -->
+							<img class="slide-img" src={getImageSrc(slide)} alt={slide.name} loading="lazy" />
+							<div class="caption-wrapper">
+								<h2 class="swiper-slide-caption">{slide.name}</h2>
+								<p class="swiper-slide-overview">{slide.overview}</p>
+							</div>
+						{/if}
 					</div>
 				{/each}
 			</div>
+			<div class="info-wrapper">
+				<p class="swiper-slide-overview">
+					Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam, quod.
+				</p>
+			</div>
 		</div>
-
 		<div class="controls-overlay {showControls ? 'visible' : ''}">
 			<div class="top-bar">
 				<button class="icon-btn" onclick={goBack} title="Configure">
@@ -233,27 +321,44 @@
 </div>
 
 <style>
+	/* ===== SLIDESHOW CONTAINER ===== */
 	.slideshow-container {
 		width: 100vw;
 		height: 100vh;
-		background: black;
+		background: #000;
 		overflow: hidden;
 		position: relative;
+		display: flex;
+		flex-direction: column;
 	}
-
+	.swiper-wrapper {
+		display: flex;
+		flex: 1 1 auto;
+		min-height: 0;
+		width: 100%;
+	}
+	.info-wrapper {
+		display: flex;
+		flex: 0 0 auto;
+		min-height: 10%;
+		max-height: 15%;
+	}
+	/* ===== SWIPER BASE ===== */
 	.swiper {
 		width: 100%;
 		height: 100%;
 	}
-
 	.swiper-slide {
 		width: 100%;
 		height: 100%;
 		position: relative;
 		overflow: hidden;
-		background-color: black;
+		background-color: #000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
-
+	/* ===== BLURRED BACKGROUND (ALL LAYOUTS) ===== */
 	.slide-bg {
 		position: absolute;
 		top: 0;
@@ -262,65 +367,202 @@
 		height: 100%;
 		background-size: cover;
 		background-position: center;
-		filter: blur(20px) brightness(0.5);
+		filter: blur(30px) brightness(0.4);
 		transform: scale(1.1);
 		z-index: 1;
 	}
-
+	/* ===== DEFAULT IMAGE STYLING ===== */
 	.slide-img {
+		opacity: 0;
+		transition: opacity 1s ease-in;
+	}
+	/* Reveal image once loaded */
+	:global(.swiper-slide-active) .slide-img {
+		opacity: 1;
+	}
+	/* ===== LAYOUT 1: AUDIO (TOP-BOTTOM) ===== */
+	.swiper-slide.is-audio {
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		padding: 2rem;
+	}
+	.audio-card {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		max-width: 90%;
+		max-height: 90%;
+		gap: 2rem;
+		z-index: 2;
+	}
+	.audio-card .slide-img {
+		width: auto;
+		height: auto;
+		max-width: 600px;
+		max-height: 60vh;
+		object-fit: contain;
+		border-radius: 12px;
+		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+	}
+	.audio-card .caption-wrapper {
+		position: static;
+		background: rgba(0, 0, 0, 0.7);
+		padding: 1.5rem 2rem;
+		border-radius: 12px;
+		backdrop-filter: blur(10px);
+		text-align: center;
+		max-width: 600px;
+		width: 100%;
+		opacity: 0;
+		transform: translateY(20px);
+		transition: all 0.5s ease-out 0.5s;
+	}
+	:global(.swiper-slide-active) .audio-card .caption-wrapper {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	.audio-card .swiper-slide-caption {
+		color: #fff;
+		font-size: 2rem;
+		font-weight: 700;
+		margin-bottom: 0.5rem;
+		text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	}
+	.audio-card .swiper-slide-overview {
+		color: #e0e0e0;
+		font-size: 1rem;
+		line-height: 1.6;
+		opacity: 0.9;
+	}
+	/* ===== LAYOUT 2: PORTRAIT (LEFT-RIGHT) ===== */
+	.swiper-slide.is-portrait {
+		flex-direction: row;
+		justify-content: center;
+		align-items: center;
+		padding: 2rem;
+	}
+	.portrait-card {
+		display: flex;
+		flex-direction: row;
+		align-items: stretch;
+		justify-content: center;
+		max-width: 90%;
+		max-height: 85vh;
+		background: rgba(0, 0, 0, 0.8);
+		border-radius: 16px;
+		overflow: hidden;
+		box-shadow: 0 25px 80px rgba(0, 0, 0, 0.7);
+		z-index: 2;
+	}
+	.portrait-card .slide-img {
+		flex: 0 0 45%;
+		width: 45%;
+		height: 100%;
+		object-fit: cover;
+		object-position: center;
+	}
+	.portrait-card .caption-wrapper {
+		position: static;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		justify-content: flex-start;
+		padding: 2.5rem;
+		background: transparent;
+		opacity: 0;
+		transform: translateX(30px);
+		transition: all 0.6s ease-out 0.5s;
+	}
+	:global(.swiper-slide-active) .portrait-card .caption-wrapper {
+		opacity: 1;
+		transform: translateX(0);
+	}
+	.portrait-card .swiper-slide-caption {
+		color: #fff;
+		font-size: 2.5rem;
+		font-weight: 700;
+		margin-bottom: 1.5rem;
+		text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+		line-height: 1.2;
+	}
+	.portrait-card .swiper-slide-overview {
+		color: #e0e0e0;
+		font-size: 1.1rem;
+		line-height: 1.7;
+		opacity: 0.95;
+		overflow-y: auto;
+		padding-right: 1rem;
+		scrollbar-width: thin;
+		scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+	}
+	.portrait-card .swiper-slide-overview::-webkit-scrollbar {
+		width: 6px;
+	}
+	.portrait-card .swiper-slide-overview::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.portrait-card .swiper-slide-overview::-webkit-scrollbar-thumb {
+		background-color: rgba(255, 255, 255, 0.3);
+		border-radius: 10px;
+	}
+	/* ===== LAYOUT 3: LANDSCAPE (FULLSCREEN BACKGROUND) ===== */
+	.swiper-slide.is-landscape {
+		flex-direction: column;
+		justify-content: flex-end;
+		align-items: flex-start;
+	}
+	.swiper-slide.is-landscape .slide-img {
 		position: absolute;
 		top: 0;
 		left: 0;
 		width: 100%;
 		height: 100%;
-		object-fit: contain;
+		object-fit: cover;
 		z-index: 2;
-		opacity: 0;
-		transition: opacity 1s ease-in;
 	}
-
-	/* Reveal image once loaded */
-	:global(.swiper-slide-active) .slide-img {
-		opacity: 1;
-	}
-
-	.caption-wrapper {
-		position: absolute;
-		bottom: 0;
-		left: 0;
+	.swiper-slide .caption-wrapper {
+		position: relative;
 		width: 100%;
-		padding: 4rem 2rem 2rem;
-		background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
+		max-width: 900px;
+		padding: 3rem;
+		background: linear-gradient(
+			to top,
+			rgba(0, 0, 0, 0.95) 0%,
+			rgba(0, 0, 0, 0.85) 40%,
+			rgba(0, 0, 0, 0.5) 70%,
+			transparent 100%
+		);
 		z-index: 3;
-		color: white;
-		text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 		opacity: 0;
-		transform: translateY(20px);
-		transition: all 0.5s ease-out 0.5s;
+		transform: translateY(30px);
+		transition: all 0.6s ease-out 0.5s;
 	}
-
 	:global(.swiper-slide-active) .caption-wrapper {
 		opacity: 1;
 		transform: translateY(0);
 	}
-
-	.slide-title {
-		font-size: 2.5rem;
+	.swiper-slide .caption-wrapper {
+		color: #fff;
+		font-size: 3rem;
 		font-weight: 700;
-		margin-bottom: 0.5rem;
+		text-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+		line-height: 1.1;
 	}
-
-	.slide-overview {
-		font-size: 1.1rem;
+	.swiper-slide .swiper-slide-overview {
+		color: #e0e0e0;
+		font-size: 1.2rem;
+		line-height: 1.6;
+		opacity: 0.95;
 		max-width: 800px;
-		line-height: 1.5;
-		opacity: 0.9;
+		text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
 		display: -webkit-box;
-		-webkit-line-clamp: 3;
+		-webkit-line-clamp: 4;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
-
+	/* ===== CONTROLS & OVERLAYS ===== */
 	.loading-overlay,
 	.error-overlay {
 		position: absolute;
@@ -337,16 +579,14 @@
 		background: #000;
 		gap: 1rem;
 	}
-
 	.spinner {
 		width: 50px;
 		height: 50px;
 		border: 4px solid rgba(255, 255, 255, 0.3);
-		border-top-color: var(--primary);
+		border-top-color: #007aff;
 		border-radius: 50%;
 		animation: spin 1s infinite linear;
 	}
-
 	.controls-overlay {
 		position: absolute;
 		top: 0;
@@ -358,47 +598,189 @@
 		opacity: 0;
 		transition: opacity 0.3s ease;
 	}
-
 	.controls-overlay.visible {
 		opacity: 1;
 		pointer-events: auto;
 	}
-
 	.top-bar {
 		position: absolute;
-		top: 1rem;
-		right: 1rem;
+		top: 1.5rem;
+		right: 1.5rem;
 		display: flex;
 		gap: 1rem;
 	}
-
 	.icon-btn {
-		background: rgba(0, 0, 0, 0.5);
+		background: rgba(0, 0, 0, 0.6);
 		border: 1px solid rgba(255, 255, 255, 0.2);
 		color: white;
-		width: 48px;
-		height: 48px;
+		width: 52px;
+		height: 52px;
 		border-radius: 50%;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		cursor: pointer;
-		transition: all 0.2s;
-		backdrop-filter: blur(5px);
+		transition: all 0.3s ease;
+		backdrop-filter: blur(10px);
 	}
-
+	.icon-btn svg {
+		width: 24px;
+		height: 24px;
+	}
 	.icon-btn:hover {
-		background: var(--primary);
-		border-color: var(--primary);
-		transform: scale(1.05);
+		background: #007aff;
+		border-color: #007aff;
+		transform: scale(1.1);
 	}
-
+	.icon-btn:active {
+		transform: scale(0.95);
+	}
 	@keyframes spin {
 		0% {
 			transform: rotate(0deg);
 		}
 		100% {
 			transform: rotate(360deg);
+		}
+	}
+	/* ===== RESPONSIVE BREAKPOINTS ===== */
+	/* Mobile Phones (Portrait) */
+	@media (max-width: 767px) {
+		/* Audio Layout */
+		.audio-card {
+			gap: 1.5rem;
+		}
+		.audio-card .slide-img {
+			max-width: 85%;
+			max-height: 50vh;
+		}
+		.audio-card .caption-wrapper {
+			padding: 1.25rem 1.5rem;
+		}
+		.audio-card .swiper-slide-caption {
+			font-size: 1.5rem;
+		}
+		.audio-card .swiper-slide-overview {
+			font-size: 0.9rem;
+		}
+		/* Portrait Layout - Stack vertically on mobile */
+		.portrait-card {
+			flex-direction: column;
+			max-height: 90vh;
+			max-width: 95%;
+		}
+		.portrait-card .slide-img {
+			flex: 0 0 50%;
+			width: 100%;
+			height: 50%;
+		}
+		.portrait-card .caption-wrapper {
+			padding: 1.5rem;
+			overflow-y: auto;
+		}
+		.portrait-card .swiper-slide-caption {
+			font-size: 1.8rem;
+			margin-bottom: 1rem;
+		}
+		.portrait-card .swiper-slide-overview {
+			font-size: 0.95rem;
+			line-height: 1.5;
+		}
+		/* Landscape Layout */
+		.swiper-slide.is-landscape .caption-wrapper {
+			padding: 2rem 1.5rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-caption {
+			font-size: 2rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-overview {
+			font-size: 1rem;
+			-webkit-line-clamp: 3;
+		}
+		.top-bar {
+			top: 1rem;
+			right: 1rem;
+		}
+		.icon-btn {
+			width: 44px;
+			height: 44px;
+		}
+		.icon-btn svg {
+			width: 20px;
+			height: 20px;
+		}
+	}
+	/* Tablets (Portrait) */
+	@media (min-width: 768px) and (max-width: 1023px) and (orientation: portrait) {
+		.portrait-card {
+			flex-direction: column;
+			max-height: 88vh;
+		}
+		.portrait-card .slide-img {
+			flex: 0 0 55%;
+			width: 100%;
+			height: 55%;
+		}
+		.portrait-card .caption-wrapper {
+			padding: 2rem;
+		}
+		.portrait-card .swiper-slide-caption {
+			font-size: 2.2rem;
+		}
+		.portrait-card .swiper-slide-overview {
+			font-size: 1.05rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-caption {
+			font-size: 2.5rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-overview {
+			font-size: 1.15rem;
+		}
+	}
+	/* Tablets (Landscape) */
+	@media (min-width: 768px) and (max-width: 1023px) and (orientation: landscape) {
+		.portrait-card {
+			flex-direction: row;
+			max-height: 80vh;
+		}
+		.portrait-card .slide-img {
+			flex: 0 0 42%;
+			width: 42%;
+		}
+		.portrait-card .swiper-slide-caption {
+			font-size: 2rem;
+		}
+		.portrait-card .swiper-slide-overview {
+			font-size: 1rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-caption {
+			font-size: 2.8rem;
+		}
+	}
+	/* Large Desktops */
+	@media (min-width: 1920px) {
+		.audio-card .slide-img {
+			max-width: 700px;
+			max-height: 65vh;
+		}
+		.audio-card .swiper-slide-caption {
+			font-size: 2.5rem;
+		}
+		.audio-card .swiper-slide-overview {
+			font-size: 1.15rem;
+		}
+		.portrait-card .swiper-slide-caption {
+			font-size: 3rem;
+		}
+		.portrait-card .swiper-slide-overview {
+			font-size: 1.25rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-caption {
+			font-size: 3.5rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-overview {
+			font-size: 1.4rem;
+			-webkit-line-clamp: 5;
 		}
 	}
 </style>

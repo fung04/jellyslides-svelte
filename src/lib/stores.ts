@@ -24,7 +24,8 @@ function persistentStore<T>(key: string, initialValue: T) {
 export const serverConfig = persistentStore<ServerConfig | null>('serverConfig', null);
 
 export const appConfig = persistentStore<AppConfig>('appConfig', {
-    pictureQuality: 1080,
+    pictureResolution: 1080,
+    pictureQuality: 100,
     libraryParams: ['Movie', 'Series'],
     duration: 30000,
     wakeLock: false,

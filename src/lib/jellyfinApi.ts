@@ -22,11 +22,11 @@ export class JellyfinApi {
         this.config = config;
     }
 
-    getImageUrl(videoId: string, imageType: string, quality: number = 720, width: number = 1280) {
+    getImageUrl(videoId: string, imageType: string, quality: number = 100, resolution: number = 1080) {
         const { baseUrl, accessToken } = this.config;
         // Remove trailing slash if present
         const cleanBaseUrl = baseUrl.replace(/\/$/, '');
-        return `${cleanBaseUrl}/Items/${videoId}/Images/${imageType}/?quality=${quality}&fillHeight=${width}&fillWidth=${width}&api_key=${accessToken}`;
+        return `${cleanBaseUrl}/Items/${videoId}/Images/${imageType}?quality=${quality}&fillHeight=${resolution}&api_key=${accessToken}`;
     }
 
     async getVideoDetails(videoId: string) {
