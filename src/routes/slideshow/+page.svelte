@@ -4,7 +4,7 @@
 	import { base } from '$app/paths';
 	import { serverConfig, appConfig } from '$lib/stores';
 	import { JellyfinApi, ImageType, VideoType } from '$lib/jellyfinApi';
-	import { applyBlurhash, getDataUrlFromBlurhash } from '$lib/blurhash';
+	import { getDataUrlFromBlurhash } from '$lib/blurhash';
 	import { slideshowState } from '$lib/slideshow-state.svelte';
 	import { initWebSocket, disconnectWebSocket } from '$lib/ws-handler';
 	// Swiper
@@ -16,15 +16,32 @@
 	import 'swiper/css/navigation';
 	import 'swiper/css/autoplay';
 
+	// ── Constants ──────────────────────────────────────────────
+	const PRELOAD_COUNT = 3;
+	const CACHE_SIZE = 10;
+	const VIRTUAL_SLIDE_COUNT = 3; // 3 physical slides in DOM (minimum for Swiper loop)
+
+	// ── Reactive state ────────────────────────────────────────
 	let swiperInstance: Swiper | null = null;
-	let slides = $state<any[]>([]);
+	let allItems: any[] = []; // Full media list from Jellyfin
+	let virtualSlides = $state<any[]>([]); // Only 2 items rendered in DOM
 	let isLoading = $state(true);
 	let error = $state('');
 	let showControls = $state(false);
 	let controlTimeout: any;
 
+	// ── Virtual-slide management ──────────────────────────────
+	let currentIndex = 0; // Points to the next item to load from allItems
+	let slideCache = new Map<
+		string,
+		{ url: string; blurhash: string; name: string; overview: string }
+	>();
+	let viewedSlides = new Set<string>();
+	let preloadAbortController: AbortController | null = null;
+
 	// Wake Lock
 	let wakeLockSentinel: WakeLockSentinel | null = null;
+	let api: JellyfinApi | null = null;
 
 	// Helper to determine layout class
 	function getLayoutType(slide: any) {
@@ -33,17 +50,32 @@
 		return 'is-landscape';
 	}
 
+	// ── requestIdleCallback polyfill for RPi ──────────────────
+	function idleCallback(fn: () => void) {
+		if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+			(window as any).requestIdleCallback(fn);
+		} else {
+			setTimeout(fn, 1);
+		}
+	}
+
+	// ── Lifecycle ─────────────────────────────────────────────
 	onMount(() => {
 		if (!$serverConfig) {
 			goto('/');
 			return;
 		}
 
+		api = new JellyfinApi($serverConfig!);
+
 		const runInit = async () => {
 			try {
 				await initSlideshow();
 				if ($appConfig.wakeLock) {
 					requestWakeLock();
+				}
+				if ($appConfig.websocket) {
+					initWebSocket($serverConfig!);
 				}
 			} catch (e: any) {
 				console.error(e);
@@ -55,7 +87,7 @@
 
 		runInit();
 
-		// Mouse movement for controls
+		// Mouse/touch for controls overlay
 		window.addEventListener('mousemove', handleUserActivity);
 		window.addEventListener('touchstart', handleUserActivity);
 
@@ -64,20 +96,19 @@
 		};
 	});
 
+	// ── Data loading ──────────────────────────────────────────
 	async function initSlideshow() {
-		const api = new JellyfinApi($serverConfig!);
 		const userId = $serverConfig!.userId;
 		const types = $appConfig.libraryParams;
 
-		let allItems: any[] = [];
+		let fetchedItems: any[] = [];
 
 		// Fetch concurrently
 		const promises = types.map(async (type) => {
-			// Fetch Primary, Backdrop, Thumb
 			const fetchTypes = [ImageType.primary, ImageType.backdrop, ImageType.thumbnail];
 
 			const typePromises = fetchTypes.map((imgType) =>
-				api
+				api!
 					.getVideoIds({
 						videoType: type,
 						imageType: imgType,
@@ -94,33 +125,49 @@
 		});
 
 		const results = await Promise.all(promises);
-		allItems = results.flat();
+		fetchedItems = results.flat();
 
-		if (allItems.length === 0) {
+		if (fetchedItems.length === 0) {
 			throw new Error('No items found with current configuration.');
 		}
 
-		// Shuffle
-		for (let i = allItems.length - 1; i > 0; i--) {
+		// Shuffle (Fisher-Yates)
+		for (let i = fetchedItems.length - 1; i > 0; i--) {
 			const j = Math.floor(Math.random() * (i + 1));
-			[allItems[i], allItems[j]] = [allItems[j], allItems[i]];
+			[fetchedItems[i], fetchedItems[j]] = [fetchedItems[j], fetchedItems[i]];
 		}
 
-		slides = allItems;
+		allItems = fetchedItems;
 
-		// Give DOM a moment
-		setTimeout(() => {
-			initSwiper();
-		}, 100);
+		// Seed the 3 virtual slides (Swiper loop requires ≥3)
+		virtualSlides = [allItems[0], allItems[1 % allItems.length], allItems[2 % allItems.length]];
+		currentIndex = 3 % allItems.length;
+
+		// Mark as viewed
+		viewedSlides.add(allItems[0].id);
+		if (allItems.length > 1) viewedSlides.add(allItems[1].id);
+		if (allItems.length > 2) viewedSlides.add(allItems[2].id);
+
+		// Let the DOM render the swiper container first
+		isLoading = false;
+		// Wait for Svelte to flush DOM, then a frame for layout
+		await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)));
+		initSwiper();
+
+		// Preload the next few images in the background
+		idleCallback(() => {
+			preloadImages(currentIndex, PRELOAD_COUNT);
+		});
 	}
 
+	// ── Swiper initialization ─────────────────────────────────
 	function initSwiper() {
 		swiperInstance = new Swiper('.swiper', {
 			modules: [Autoplay, EffectFade, Keyboard, Navigation],
 			effect: 'fade',
 			fadeEffect: { crossFade: true },
 			speed: 1500,
-			loop: true,
+			rewind: true,
 			autoplay: {
 				delay: $appConfig.duration || 10000,
 				disableOnInteraction: false,
@@ -133,17 +180,94 @@
 			observeParents: true
 		});
 
-		console.log('Swiper initialized');
+		// ── On every transition end: swap the offscreen slide's content ──
+		swiperInstance.on('slideChangeTransitionEnd', () => {
+			if (!allItems || allItems.length === 0) return;
+			if (!swiperInstance) return;
+
+			swiperInstance.autoplay.pause();
+
+			// Wrap around
+			if (currentIndex >= allItems.length) {
+				currentIndex = 0;
+			}
+
+			const activeIdx = swiperInstance.activeIndex;
+
+			// Determine which slot(s) to update with fresh content
+			// We update the slots that are NOT currently active
+			const slotsToUpdate: number[] = [];
+			for (let s = 0; s < VIRTUAL_SLIDE_COUNT; s++) {
+				if (s !== activeIdx) slotsToUpdate.push(s);
+			}
+
+			for (const slot of slotsToUpdate) {
+				// Pick next unseen item
+				let videoToShow = allItems[currentIndex];
+				let attempts = 0;
+
+				while (viewedSlides.has(videoToShow.id) && attempts < allItems.length) {
+					currentIndex = (currentIndex + 1) % allItems.length;
+					videoToShow = allItems[currentIndex];
+					attempts++;
+				}
+
+				// If everything has been viewed, reset and show all again
+				if (attempts >= allItems.length) {
+					viewedSlides.clear();
+				}
+
+				// Update the virtual slide data (triggers Svelte reactivity)
+				virtualSlides[slot] = videoToShow;
+
+				// Track viewed
+				viewedSlides.add(videoToShow.id);
+
+				// Advance pointer
+				currentIndex = (currentIndex + 1) % allItems.length;
+			}
+
+			// Manage cache size
+			if (slideCache.size > CACHE_SIZE) {
+				const oldestKey = slideCache.keys().next().value;
+				if (oldestKey) slideCache.delete(oldestKey);
+			}
+
+			// Preload next batch in idle time
+			const nextPreloadIndex = currentIndex;
+			idleCallback(() => {
+				preloadImages(nextPreloadIndex, PRELOAD_COUNT);
+			});
+
+			// Resume autoplay
+			swiperInstance.autoplay.resume();
+		});
+
+		// Resize handler
+		swiperInstance.on('resize', () => {
+			if (slideshowState.isRemoteControlling) return;
+			swiperInstance!.update();
+			if (swiperInstance!.autoplay.paused) {
+				swiperInstance!.autoplay.resume();
+			}
+		});
+
+		// Start autoplay explicitly (constructor config sets it up, but we ensure it's running)
+		swiperInstance.autoplay.start();
+		console.log(`Swiper initialized – ${allItems.length} items, ${VIRTUAL_SLIDE_COUNT} DOM slides`);
 	}
 
+	// ── Image helpers ─────────────────────────────────────────
 	function getImageSrc(slide: any) {
-		if (!slide) return '';
-		const api = new JellyfinApi($serverConfig!);
-		return api.getImageUrl(slide.id, slide.imageType, $appConfig.pictureQuality || 1080);
+		if (!slide || !api) return '';
+		const quality = $appConfig.pictureQuality || 100;
+		// Use 720p on RPi to save bandwidth & memory
+		const resolution = $appConfig.pictureResolution || 720;
+		return api.getImageUrl(slide.id, slide.imageType, quality, resolution);
 	}
 
 	function getBlurhashDataUrl(slide: any) {
-		if (!slide.blurhash) return '';
+		if (!slide?.blurhash) return '';
 		try {
 			const hash =
 				typeof slide.blurhash === 'string' ? slide.blurhash : Object.values(slide.blurhash)[0];
@@ -153,6 +277,54 @@
 		}
 	}
 
+	// ── Image preloading ──────────────────────────────────────
+	async function preloadImages(startIndex: number, count: number) {
+		// Abort any previous preload batch
+		if (preloadAbortController) {
+			preloadAbortController.abort();
+		}
+		preloadAbortController = new AbortController();
+		const signal = preloadAbortController.signal;
+
+		try {
+			const promises: Promise<void>[] = [];
+			for (let i = 0; i < count; i++) {
+				if (signal.aborted) break;
+				const index = (startIndex + i) % allItems.length;
+				const item = allItems[index];
+				if (!item || slideCache.has(item.id)) continue;
+
+				const url = getImageSrc(item);
+				if (!url) continue;
+
+				const promise = new Promise<void>((resolve, reject) => {
+					const img = new Image();
+					img.onload = () => {
+						slideCache.set(item.id, {
+							url,
+							blurhash:
+								typeof item.blurhash === 'string'
+									? item.blurhash
+									: (Object.values(item.blurhash)[0] as string),
+							name: item.name,
+							overview: item.overview || ''
+						});
+						resolve();
+					};
+					img.onerror = () => reject(new Error(`Failed to preload ${item.id}`));
+					img.src = url;
+				});
+				promises.push(promise);
+			}
+			await Promise.allSettled(promises);
+		} catch (err) {
+			if (!signal.aborted) {
+				console.warn('Preload error:', err);
+			}
+		}
+	}
+
+	// ── Keyboard ──────────────────────────────────────────────
 	function handleKeydown(e: KeyboardEvent) {
 		if (!swiperInstance) return;
 		if (e.key === 'ArrowRight') {
@@ -172,31 +344,24 @@
 		}
 	}
 
-	// --- Reactivity for Remote Control ---
+	// ── WebSocket Remote Control ──────────────────────────────
 	$effect(() => {
 		if (slideshowState.isRemoteControlling && slideshowState.activeSlide) {
 			const newItem = slideshowState.activeSlide;
-			console.log('Switching to Remote Slide:', newItem.name);
+			console.log('Remote control → slide:', newItem.name);
+
 			if (swiperInstance) {
 				swiperInstance.autoplay.stop();
-				// Strategy: Find current index, replace NEXT slide with new item, slide to it.
-				// Or simplier for Svelte: Update `slides` array?
-				// Updating `slides` array causes re-render of list.
-				// Let's try to just prepend the new item and slide to 0.
-				// Note: `slides` is reactive state.
-				// slides = [newItem, ...slides];
-				// The above might cause full DOM refresh.
-				// Alternative: Just set slides to [newItem] if we want to lock it?
-				// But we want transitions.
-				// Let's replace the "active" slide in the array *after* the current one.
-				// Replace the next slide with the remote item, then slide to it
+
+				// Place the remote item in the NEXT virtual slot
 				const activeIndex = swiperInstance.realIndex;
-				const nextIndex = (activeIndex + 1) % slides.length;
-				// Update the data in the array
-				slides[nextIndex] = newItem;
-				// Trigger Swiper update (it observes DOM)
+				const nextSlotIndex = (activeIndex + 1) % VIRTUAL_SLIDE_COUNT;
+
+				// Overwrite virtual slide data
+				virtualSlides[nextSlotIndex] = newItem;
+
+				// Let Svelte update the DOM, then slide to it
 				setTimeout(() => {
-					swiperInstance?.slideToLoop(nextIndex);
 					swiperInstance?.slideNext();
 				}, 50);
 			}
@@ -205,11 +370,12 @@
 			swiperInstance &&
 			!swiperInstance.autoplay.running
 		) {
-			// Resume Autoplay
+			// Remote control released → resume autoplay
 			swiperInstance.autoplay.start();
 		}
 	});
 
+	// ── Wake Lock ─────────────────────────────────────────────
 	async function requestWakeLock() {
 		if ('wakeLock' in navigator) {
 			try {
@@ -221,6 +387,7 @@
 		}
 	}
 
+	// ── Controls overlay ──────────────────────────────────────
 	function handleUserActivity() {
 		showControls = true;
 		clearTimeout(controlTimeout);
@@ -229,26 +396,50 @@
 		}, 3000);
 	}
 
+	// ── Cleanup ───────────────────────────────────────────────
 	function cleanup() {
 		if (typeof window !== 'undefined') {
 			window.removeEventListener('mousemove', handleUserActivity);
 			window.removeEventListener('touchstart', handleUserActivity);
 		}
 
+		// Abort pending preloads
+		if (preloadAbortController) {
+			preloadAbortController.abort();
+			preloadAbortController = null;
+		}
+
+		// Release wake lock
 		if (wakeLockSentinel) {
 			wakeLockSentinel.release().catch(() => {});
 			wakeLockSentinel = null;
 		}
 
+		// Destroy Swiper
 		if (swiperInstance) {
-			swiperInstance.destroy();
+			swiperInstance.autoplay.stop();
+			swiperInstance.destroy(true, true);
+			swiperInstance = null;
 		}
+
+		// Disconnect WebSocket
+		disconnectWebSocket();
+
+		// Clear caches to free memory
+		slideCache.clear();
+		viewedSlides.clear();
+
+		// Null out the big array
+		allItems = [];
+		virtualSlides = [];
 	}
 
 	function goBack() {
 		goto('/config');
 	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="slideshow-container">
 	{#if isLoading}
@@ -264,11 +455,11 @@
 	{:else}
 		<div class="swiper swiper-container">
 			<div class="swiper-wrapper">
-				{#each slides as slide, i (slide.id + i)}
-					<!-- Determine Layout Class -->
+				<!-- Only 2 slides in the DOM at any time -->
+				{#each virtualSlides as slide, i (i)}
 					{@const layoutClass = getLayoutType(slide)}
 					<div class="swiper-slide {layoutClass}">
-						<!-- Background (Applied to all) -->
+						<!-- Blurhash background -->
 						<div
 							class="slide-bg"
 							style="background-image: url('{getBlurhashDataUrl(slide)}');"
@@ -299,11 +490,6 @@
 						{/if}
 					</div>
 				{/each}
-			</div>
-			<div class="info-wrapper">
-				<p class="swiper-slide-overview">
-					Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam, quod.
-				</p>
 			</div>
 		</div>
 		<div class="controls-overlay {showControls ? 'visible' : ''}">
@@ -336,12 +522,6 @@
 		flex: 1 1 auto;
 		min-height: 0;
 		width: 100%;
-	}
-	.info-wrapper {
-		display: flex;
-		flex: 0 0 auto;
-		min-height: 10%;
-		max-height: 15%;
 	}
 	/* ===== SWIPER BASE ===== */
 	.swiper {
