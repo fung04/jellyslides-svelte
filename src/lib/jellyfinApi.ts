@@ -97,13 +97,79 @@ export class JellyfinApi {
         return response.json();
     }
 
+    /**
+     * Explode a single Jellyfin item into multiple entries based on available image tags.
+     * Audio items always return a single entry with imageType 'Primary'.
+     */
+    private explodeItemByImageType(item: any, videoType: string): any[] {
+        const results: any[] = [];
+        const imageTags = item['ImageTags'] || {};
+        const backdropTags = item['BackdropImageTags'] || [];
+        const blurHashes = item['ImageBlurHashes'] || {};
+
+        let name = item['Name'] || '';
+        if (videoType === VideoType.season) {
+            const lowerName = name.toLowerCase();
+            if (lowerName.includes('season') || lowerName.includes('special')) {
+                name = item['SeriesName'] || name;
+            }
+        }
+
+        const base = {
+            id: item['Id'],
+            name,
+            overview: item['Overview'] || '',
+            type: item['Type']
+        };
+
+        // Audio: always Primary only
+        if (videoType === VideoType.audio) {
+            if (imageTags['Primary'] && blurHashes['Primary']) {
+                results.push({
+                    ...base,
+                    name: item['Album'] || item['Name'],
+                    blurhash: blurHashes['Primary'],
+                    imageType: ImageType.primary
+                });
+            }
+            return results;
+        }
+
+        // Primary
+        if (imageTags['Primary'] && blurHashes['Primary']) {
+            results.push({
+                ...base,
+                blurhash: blurHashes['Primary'],
+                imageType: ImageType.primary
+            });
+        }
+
+        // Thumb
+        if (imageTags['Thumb'] && blurHashes['Thumb']) {
+            results.push({
+                ...base,
+                blurhash: blurHashes['Thumb'],
+                imageType: ImageType.thumbnail
+            });
+        }
+
+        // Backdrop
+        if (backdropTags.length > 0 && blurHashes['Backdrop']) {
+            results.push({
+                ...base,
+                blurhash: blurHashes['Backdrop'],
+                imageType: ImageType.backdrop
+            });
+        }
+
+        return results;
+    }
+
     async getVideoIds({
         videoType,
-        imageType,
         userId
     }: {
         videoType: string;
-        imageType: string;
         userId: string;
     }) {
         const { baseUrl, accessToken } = this.config;
@@ -121,12 +187,6 @@ export class JellyfinApi {
         }
 
         const jsonData = await response.json();
-        const hashtype =
-            imageType === ImageType.backdrop
-                ? 'Backdrop'
-                : imageType === ImageType.thumbnail
-                    ? 'Thumb'
-                    : 'Primary';
 
         // Handle BoxSets (Collections)
         if (videoType === VideoType.boxset) {
@@ -136,16 +196,14 @@ export class JellyfinApi {
                     this.fetchAndProcessChildItems({
                         parentId,
                         userId,
-                        videoType,
-                        imageType,
-                        hashtype
+                        videoType
                     })
                 )
             );
             return childResults.flat();
         }
 
-        // Handle Audio
+        // Handle Audio – deduplicate by album first
         if (videoType === VideoType.audio) {
             const uniqueItems: Record<string, any> = {};
             jsonData['Items'].forEach((item: any) => {
@@ -153,64 +211,25 @@ export class JellyfinApi {
                 uniqueItems[key] = item;
             });
 
-            return Object.values(uniqueItems)
-                .filter(
-                    (item: any) =>
-                        item['ImageTags']?.['Primary'] ||
-                        (item['BackdropImageTags'] && item['ImageBlurHashes']?.[hashtype])
-                )
-                .map((item: any) => ({
-                    id:
-                        item['ImageTags']?.['Primary'] ||
-                            (item['BackdropImageTags'] && item['BackdropImageTags'].length > 0)
-                            ? item['Id']
-                            : item['AlbumId'],
-                    name: item['Album'] || item['Name'],
-                    type: item['Type'],
-                    overview: item['Overview'] || '',
-                    blurhash: item['ImageBlurHashes']?.[hashtype],
-                    imageType: imageType
-                }));
+            return Object.values(uniqueItems).flatMap((item: any) =>
+                this.explodeItemByImageType(item, videoType)
+            );
         }
 
         // Default handling (Movies, Series, Seasons)
-        const filteredItems = jsonData['Items'].filter(
-            (item: any) =>
-                item['ImageTags'] && item['ImageBlurHashes'] && item['ImageBlurHashes'][hashtype]
+        return jsonData['Items'].flatMap((item: any) =>
+            this.explodeItemByImageType(item, videoType)
         );
-
-        return filteredItems.map((item: any) => {
-            let name = item['Name'] || '';
-            if (videoType === VideoType.season) {
-                const lowerName = name.toLowerCase();
-                if (lowerName.includes('season') || lowerName.includes('special')) {
-                    name = item['SeriesName'] || name;
-                }
-            }
-
-            return {
-                id: item['Id'],
-                name: name,
-                overview: item['Overview'] || '',
-                type: item['Type'],
-                blurhash: item['ImageBlurHashes'][hashtype],
-                imageType: imageType
-            };
-        });
     }
 
     async fetchAndProcessChildItems({
         parentId,
         userId,
-        videoType,
-        imageType,
-        hashtype
+        videoType
     }: {
         parentId: { id: string };
         userId: string;
         videoType: string;
-        imageType: string;
-        hashtype: string;
     }) {
         const { baseUrl, accessToken } = this.config;
         const cleanBaseUrl = baseUrl.replace(/\/$/, '');
@@ -228,25 +247,9 @@ export class JellyfinApi {
 
         const childJsonData = await response.json();
 
-        let processedItems: any[] = [];
-
-        if (videoType === VideoType.boxset) {
-            processedItems = childJsonData['Items']
-                .filter(
-                    (item: any) =>
-                        item['ImageTags']?.['Primary'] ||
-                        (item['BackdropImageTags'] && item['ImageBlurHashes']?.[hashtype])
-                )
-                .map((item: any) => ({
-                    id: item['Id'],
-                    name: item['Name'],
-                    type: item['Type'],
-                    overview: item['Overview'] || '',
-                    blurhash: item['ImageBlurHashes']?.[hashtype],
-                    imageType: imageType
-                }));
-        }
-
-        return processedItems;
+        return childJsonData['Items'].flatMap((item: any) =>
+            this.explodeItemByImageType(item, videoType)
+        );
     }
 }
+

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { serverConfig, appConfig } from '$lib/stores';
-	import { JellyfinApi, ImageType, VideoType } from '$lib/jellyfinApi';
+	import { JellyfinApi, VideoType } from '$lib/jellyfinApi';
 	import { getDataUrlFromBlurhash } from '$lib/blurhash';
 	import { slideshowState } from '$lib/slideshow-state.svelte';
 	import { initWebSocket, disconnectWebSocket } from '$lib/ws-handler';
@@ -103,25 +103,12 @@
 
 		let fetchedItems: any[] = [];
 
-		// Fetch concurrently
+		// Fetch concurrently — one call per video type (image types auto-detected)
 		const promises = types.map(async (type) => {
-			const fetchTypes = [ImageType.primary, ImageType.backdrop, ImageType.thumbnail];
-
-			const typePromises = fetchTypes.map((imgType) =>
-				api!
-					.getVideoIds({
-						videoType: type,
-						imageType: imgType,
-						userId
-					})
-					.catch((err) => {
-						console.warn(`Failed to fetch ${type} ${imgType}`, err);
-						return [];
-					})
-			);
-
-			const results = await Promise.all(typePromises);
-			return results.flat();
+			return api!.getVideoIds({ videoType: type, userId }).catch((err) => {
+				console.warn(`Failed to fetch ${type}`, err);
+				return [];
+			});
 		});
 
 		const results = await Promise.all(promises);
@@ -577,7 +564,7 @@
 		gap: 2rem;
 		z-index: 2;
 	}
-	.audio-card .slide-img {
+	.swiper-slide .audio-card .slide-img {
 		width: auto;
 		height: auto;
 		max-width: 600px;
@@ -586,7 +573,7 @@
 		border-radius: 12px;
 		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
 	}
-	.audio-card .caption-wrapper {
+	.swiper-slide .audio-card .caption-wrapper {
 		position: static;
 		background: rgba(0, 0, 0, 0.7);
 		padding: 1.5rem 2rem;
@@ -603,14 +590,14 @@
 		opacity: 1;
 		transform: translateY(0);
 	}
-	.audio-card .swiper-slide-caption {
+	.swiper-slide .audio-card .swiper-slide-caption {
 		color: #fff;
 		font-size: 2rem;
 		font-weight: 700;
 		margin-bottom: 0.5rem;
 		text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 	}
-	.audio-card .swiper-slide-overview {
+	.swiper-slide .audio-card .swiper-slide-overview {
 		color: #e0e0e0;
 		font-size: 1rem;
 		line-height: 1.6;
