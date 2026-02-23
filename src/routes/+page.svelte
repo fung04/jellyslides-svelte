@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { JellyfinApi } from '$lib/jellyfinApi';
 	import { serverConfig } from '$lib/stores';
 	import { generateDeviceId } from '$lib/utils';
@@ -14,7 +14,7 @@
 
 	onMount(() => {
 		if ($serverConfig) {
-			goto(`${base}/slideshow`);
+			goto(resolve('/slideshow'));
 		}
 	});
 
@@ -61,7 +61,7 @@
 				deviceId: deviceId
 			});
 
-			goto(`${base}/config`);
+			goto(resolve('/config'));
 		} catch (e: any) {
 			console.error(e);
 			error = 'Connection failed. Please check your URL and credentials.';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { serverConfig, appConfig } from '$lib/stores';
 	import { onMount } from 'svelte';
 
@@ -27,7 +27,7 @@
 
 	onMount(() => {
 		if (!$serverConfig) {
-			goto(`${base}/`);
+			goto(resolve('/'));
 			return;
 		}
 
@@ -59,12 +59,12 @@
 			websocket
 		});
 
-		goto(`${base}/slideshow`);
+		goto(resolve('/slideshow'));
 	}
 
 	function handleLogout() {
 		serverConfig.set(null);
-		goto(`${base}/`);
+		goto(resolve('/'));
 	}
 </script>
 

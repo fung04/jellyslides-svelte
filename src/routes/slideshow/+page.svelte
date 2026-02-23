@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { serverConfig, appConfig } from '$lib/stores';
 	import { JellyfinApi, VideoType } from '$lib/jellyfinApi';
 	import { getDataUrlFromBlurhash } from '$lib/blurhash';
@@ -62,7 +62,7 @@
 	// ── Lifecycle ─────────────────────────────────────────────
 	onMount(() => {
 		if (!$serverConfig) {
-			goto('/');
+			goto(resolve('/'));
 			return;
 		}
 
@@ -422,7 +422,7 @@
 	}
 
 	function goBack() {
-		goto('/config');
+		goto(resolve('/config'));
 	}
 </script>
 
