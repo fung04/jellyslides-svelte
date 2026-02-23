@@ -129,6 +129,7 @@ export class JellyfinApi {
                     ...base,
                     name: item['Album'] || item['Name'],
                     blurhash: blurHashes['Primary'],
+                    overview: item['AlbumArtist'] || '',
                     imageType: ImageType.primary
                 });
             }

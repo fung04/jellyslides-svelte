@@ -14,8 +14,7 @@
 
 	onMount(() => {
 		if ($serverConfig) {
-			url = $serverConfig.baseUrl;
-			username = $serverConfig.username;
+			goto(`${base}/slideshow`);
 		}
 	});
 
