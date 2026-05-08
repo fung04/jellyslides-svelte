@@ -30,7 +30,7 @@
 		try {
 			let cleanUrl = url.trim();
 			if (!cleanUrl.startsWith('http')) {
-				cleanUrl = 'http://' + cleanUrl;
+				cleanUrl = 'https://' + cleanUrl;
 			}
 			// Remove trailing slash
 			if (cleanUrl.endsWith('/')) {
