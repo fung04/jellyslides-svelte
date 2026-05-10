@@ -696,17 +696,19 @@
 		width: 100%;
 		max-width: 900px;
 		padding: 3rem;
-		background: linear-gradient(
-			to top,
-			rgba(0, 0, 0, 0.95) 0%,
-			rgba(0, 0, 0, 0.85) 40%,
-			rgba(0, 0, 0, 0.5) 70%,
-			transparent 100%
-		);
+		background: none;
 		z-index: 3;
 		opacity: 0;
 		transform: translateY(30px);
 		transition: all 0.6s ease-out 0.5s;
+	}
+	:global(.swiper-slide.is-landscape::after) {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background: radial-gradient(ellipse at bottom left, rgba(0, 0, 0, 0.7) 0%, transparent 50%);
+		z-index: 2;
+		pointer-events: none;
 	}
 	:global(.swiper-slide-active) .caption-wrapper {
 		opacity: 1;
@@ -932,13 +934,13 @@
 		.swiper-slide.is-audio {
 			flex-direction: row;
 			justify-content: space-between;
-			align-items: stretch;
-			padding: 0.5rem 1rem;
+			align-items: center;
+			padding: 6rem 3rem;
 		}
 		.audio-card {
 			flex-direction: row;
 			align-items: center;
-			gap: 1rem;
+			/* gap: 1rem; */
 			min-width: 100%;
 			max-height: 98%;
 		}
@@ -950,18 +952,20 @@
 			flex-shrink: 0;
 		}
 		.swiper-slide .audio-card .caption-wrapper {
-			text-align: left;
+			text-align: center;
 			padding: 0.75rem 1rem;
 			flex: 1;
 			max-width: none;
+			background: none;
 		}
 		.swiper-slide .audio-card .swiper-slide-caption {
-			font-size: 1.1rem;
+			font-size: 1.8rem;
 			margin-bottom: 0.25rem;
 		}
 		.swiper-slide .audio-card .swiper-slide-overview {
 			font-size: 0.8rem;
 			line-height: 1.4;
+			margin-bottom: 0.2rem;
 		}
 
 		/* Portrait – compact row, more room for overview */
@@ -980,11 +984,11 @@
 			overflow-y: auto;
 		}
 		.portrait-card .swiper-slide-caption {
-			font-size: 1.1rem;
-			margin-bottom: 0.4rem;
+			font-size: 1.8rem;
+			margin-bottom: 1rem;
 		}
 		.portrait-card .swiper-slide-overview {
-			font-size: 0.8rem;
+			font-size: 0.9rem;
 			line-height: 1.5;
 			-webkit-line-clamp: 8;
 		}
@@ -992,15 +996,15 @@
 		/* Landscape – compact caption that doesn't eat the image */
 		.swiper-slide.is-landscape .caption-wrapper {
 			padding: 0.75rem 1rem 1rem;
-			max-width: 100%;
+			max-width: 60vw;
 		}
 		.swiper-slide.is-landscape .swiper-slide-caption {
-			font-size: 1.3rem;
+			font-size: 1.8rem;
 		}
 		.swiper-slide.is-landscape .swiper-slide-overview {
-			font-size: 0.8rem;
+			font-size: 0.9rem;
 			line-height: 1.4;
-			-webkit-line-clamp: 2;
+			-webkit-line-clamp: 5;
 		}
 
 		.top-bar {
