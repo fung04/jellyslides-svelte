@@ -19,7 +19,7 @@
 	// ── Constants ──────────────────────────────────────────────
 	const PRELOAD_COUNT = 3;
 	const CACHE_SIZE = 10;
-	const VIRTUAL_SLIDE_COUNT = 3; // 3 physical slides in DOM (minimum for Swiper loop)
+	const VIRTUAL_SLIDE_COUNT = 10; // 3 physical slides in DOM (minimum for Swiper loop)
 
 	// ── Reactive state ────────────────────────────────────────
 	let swiperInstance: Swiper | null = null;
@@ -126,9 +126,12 @@
 
 		allItems = fetchedItems;
 
-		// Seed the 3 virtual slides (Swiper loop requires ≥3)
-		virtualSlides = [allItems[0], allItems[1 % allItems.length], allItems[2 % allItems.length]];
-		currentIndex = 3 % allItems.length;
+		// Seed the virtual slides with the first few items (or repeats if less than VIRTUAL_SLIDE_COUNT)	
+		for (let i = VIRTUAL_SLIDE_COUNT; i--;) {
+			virtualSlides[i] = allItems[i % allItems.length];
+		}
+
+		currentIndex = VIRTUAL_SLIDE_COUNT % allItems.length;
 
 		// Mark as viewed
 		viewedSlides.add(allItems[0].id);
@@ -624,10 +627,9 @@
 		z-index: 2;
 	}
 	.portrait-card .slide-img {
-		flex: 0 0 45%;
-		width: 45%;
-		height: 100%;
-		object-fit: cover;
+		flex: 0 0 35%;
+		width: 35%;
+		object-fit: contain;
 		object-position: center;
 	}
 	.portrait-card .caption-wrapper {
@@ -922,6 +924,96 @@
 		}
 		.swiper-slide.is-landscape .swiper-slide-caption {
 			font-size: 2.8rem;
+		}
+	}
+	/* Small Landscape Displays (e.g. 800×480 RPi touchscreen) */
+	@media (max-height: 520px) and (orientation: landscape) {
+		/* Audio – switch to horizontal row so height isn't consumed by stacking */
+		.swiper-slide.is-audio {
+			flex-direction: row;
+			justify-content: space-between;
+			align-items: stretch;
+			padding: 0.5rem 1rem;
+		}
+		.audio-card {
+			flex-direction: row;
+			align-items: center;
+			gap: 1rem;
+			min-width: 100%;
+			max-height: 98%;
+		}
+		.swiper-slide .audio-card .slide-img {
+			max-width: 38%;
+			min-width: 300px;
+			object-fit: cover;
+			max-height: 88%;
+			flex-shrink: 0;
+		}
+		.swiper-slide .audio-card .caption-wrapper {
+			text-align: left;
+			padding: 0.75rem 1rem;
+			flex: 1;
+			max-width: none;
+		}
+		.swiper-slide .audio-card .swiper-slide-caption {
+			font-size: 1.1rem;
+			margin-bottom: 0.25rem;
+		}
+		.swiper-slide .audio-card .swiper-slide-overview {
+			font-size: 0.8rem;
+			line-height: 1.4;
+		}
+
+		/* Portrait – compact row, more room for overview */
+		.portrait-card {
+			flex-direction: row;
+			max-height: 95vh;
+			max-width: 98%;
+		}
+		.portrait-card .slide-img {
+			flex: 0 0 38%;
+			width: 38%;
+			height: 100%;
+		}
+		.portrait-card .caption-wrapper {
+			padding: 0.75rem 1rem;
+			overflow-y: auto;
+		}
+		.portrait-card .swiper-slide-caption {
+			font-size: 1.1rem;
+			margin-bottom: 0.4rem;
+		}
+		.portrait-card .swiper-slide-overview {
+			font-size: 0.8rem;
+			line-height: 1.5;
+			-webkit-line-clamp: 8;
+		}
+
+		/* Landscape – compact caption that doesn't eat the image */
+		.swiper-slide.is-landscape .caption-wrapper {
+			padding: 0.75rem 1rem 1rem;
+			max-width: 100%;
+		}
+		.swiper-slide.is-landscape .swiper-slide-caption {
+			font-size: 1.3rem;
+		}
+		.swiper-slide.is-landscape .swiper-slide-overview {
+			font-size: 0.8rem;
+			line-height: 1.4;
+			-webkit-line-clamp: 2;
+		}
+
+		.top-bar {
+			top: 0.5rem;
+			right: 0.5rem;
+		}
+		.icon-btn {
+			width: 36px;
+			height: 36px;
+		}
+		.icon-btn svg {
+			width: 18px;
+			height: 18px;
 		}
 	}
 	/* Large Desktops */
