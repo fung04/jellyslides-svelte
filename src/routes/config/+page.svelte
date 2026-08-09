@@ -145,9 +145,23 @@
 				<div class="section-header">
 					<h3>Slideshow Duration</h3>
 				</div>
-				<div class="duration-input">
-					<input type="number" id="duration" min="5" bind:value={duration} />
-					<span class="input-suffix">seconds</span>
+				<div class="duration-controls">
+					<div class="duration-input">
+						<input type="input" id="duration" min="5" bind:value={duration} />
+						<span class="input-suffix">seconds</span>
+					</div>
+					<button
+						class="btn btn-primary"
+						onclick={() => (duration = Math.max(5, duration + 5))}
+					>
+						+
+					</button>
+					<button
+						class="btn btn-primary"
+						onclick={() => (duration = Math.max(5, duration - 5))}
+					>
+						-
+					</button>
 				</div>
 			</section>
 
@@ -507,6 +521,13 @@
 		outline: none;
 		border-color: var(--input-focus-border);
 		background: var(--input-focus-bg);
+	}
+
+	.duration-controls {
+		display: flex;
+		justify-content: space-between;
+		gap: var(--spacing-md);
+		margin-top: var(--spacing-md);
 	}
 
 	.input-suffix {
